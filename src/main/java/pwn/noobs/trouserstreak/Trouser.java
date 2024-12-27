@@ -18,12 +18,12 @@ public class Trouser extends MeteorAddon {
         public void onInitialize() {
                 LOG.info("Initializing PantsMod!");
 
+                Modules.get().add(new ActivatedSpawnerDetector());
+                Modules.get().add(new HoleAndTunnelAndStairsESP());
                 Modules.get().add(new NewerNewChunks());
                 Modules.get().add(new BaseFinder());
-                Modules.get().add(new ActivatedSpawnerDetector());
-                Modules.get().add(new PotESP());
-                Modules.get().add(new HoleAndTunnelAndStairsESP());
                 Modules.get().add(new StorageLooter());
+                Modules.get().add(new PotESP());
                 Modules.get().add(new NbtEditor());
                 Commands.add(new ViewNbtCommand());
         }
