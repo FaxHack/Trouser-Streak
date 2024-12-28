@@ -9,7 +9,6 @@
   },
   "mixins": [
     "accessor.ClientConnectionAccessor",
-    "PlayerEntityMixin",
-    "TrouserSplashTextMixin"
+    "PlayerEntityMixin"
   ]
 }
