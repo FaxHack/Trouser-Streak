@@ -1,10 +1,13 @@
+//made by etianl :D
 package pwn.noobs.trouserstreak.modules;
 
+import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
+import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.*;
@@ -17,6 +20,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.WorldChunk;
 import pwn.noobs.trouserstreak.Trouser;
@@ -27,293 +31,373 @@ public class ActivatedSpawnerDetector extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
 
-    private final Setting<Boolean> extraMessage = sgGeneral.add(new BoolSetting.Builder()
-            .name("stash-message")
+    private final Setting<Boolean> extramessage = sgGeneral.add(new BoolSetting.Builder()
+            .name("Stash Message")
             .description("Toggle the message reminding you about stashes.")
             .defaultValue(true)
-            .build());
-
+            .build()
+    );
     private final Setting<Boolean> lessSpam = sgGeneral.add(new BoolSetting.Builder()
-            .name("less-stash-spam")
-            .description("Suppress stash messages if no chests are within 16 blocks of the spawner.")
+            .name("Less Stash Spam")
+            .description("Do not display the message reminding you about stashes if NO chests within 16 blocks of spawner.")
             .defaultValue(true)
-            .visible(extraMessage::get)
-            .build());
-
-    private final Setting<List<Block>> storageBlocks = sgGeneral.add(new BlockListSetting.Builder()
-            .name("storage-blocks")
-            .description("Blocks considered as storage when evaluating messages and renders.")
-            .defaultValue(Arrays.asList(Blocks.CHEST, Blocks.BARREL, Blocks.HOPPER, Blocks.DISPENSER))
-            .build());
-
-    private final Setting<Boolean> displayCoords = sgGeneral.add(new BoolSetting.Builder()
-            .name("display-coords")
-            .description("Displays the coordinates of activated spawners in chat.")
+            .visible(() -> extramessage.get())
+            .build()
+    );
+    private final Setting<List<Block>> blocks = sgGeneral.add(new BlockListSetting.Builder()
+            .name("Storage Blocks")
+            .description("Storage Blocks the module checks for when considering displaying messages and renders.")
+            .defaultValue(Blocks.CHEST, Blocks.BARREL, Blocks.HOPPER, Blocks.DISPENSER)
+            .build()
+    );
+    private final Setting<Boolean> displaycoords = sgGeneral.add(new BoolSetting.Builder()
+            .name("DisplayCoords")
+            .description("Displays coords of activated spawners in chat.")
             .defaultValue(true)
-            .build());
-
-    private final Setting<Boolean> detectDeactivatedSpawner = sgGeneral.add(new BoolSetting.Builder()
-            .name("deactivated-spawner-detector")
+            .build()
+    );
+    private final Setting<Boolean> deactivatedSpawner = sgGeneral.add(new BoolSetting.Builder()
+            .name("De-Activated Spawner Detector")
             .description("Detects spawners with torches on them.")
             .defaultValue(true)
-            .build());
-
-    private final Setting<Boolean> detectTrialSpawner = sgGeneral.add(new BoolSetting.Builder()
-            .name("trial-spawner-detector")
-            .description("Detects activated trial spawners.")
+            .build()
+    );
+    private final Setting<Boolean> trialSpawner = sgGeneral.add(new BoolSetting.Builder()
+            .name("Trial Spawner Detector")
+            .description("Detects activated Trial Spawners.")
             .defaultValue(true)
-            .build());
-
-    private final Setting<Integer> torchScanDistance = sgGeneral.add(new IntSetting.Builder()
-            .name("torch-scan-distance")
-            .description("Scan distance for light-producing blocks around spawners.")
+            .build()
+    );
+    public final Setting<Integer> deactivatedSpawnerdistance = sgGeneral.add(new IntSetting.Builder()
+            .name("Torch Scan distance")
+            .description("How many blocks from the spawner to look for blocks that make light")
             .defaultValue(1)
             .min(1)
-            .sliderRange(1, 10)
-            .visible(detectDeactivatedSpawner::get)
-            .build());
-
+            .sliderRange(1,10)
+            .visible(() -> deactivatedSpawner.get())
+            .build()
+    );
     private final Setting<Boolean> lessRenderSpam = sgRender.add(new BoolSetting.Builder()
-            .name("less-render-spam")
-            .description("Suppress rendering if no chests are within 16 blocks of the spawner.")
+            .name("Less Render Spam")
+            .description("Do not render if NO chests within 16 blocks of spawner.")
             .defaultValue(true)
-            .build());
-
-    private final Setting<Integer> renderDistance = sgRender.add(new IntSetting.Builder()
-            .name("render-distance")
-            .description("Render distance in chunks from the player.")
+            .build()
+    );
+    public final Setting<Integer> renderDistance = sgRender.add(new IntSetting.Builder()
+            .name("Render-Distance(Chunks)")
+            .description("How many chunks from the character to render the detected chunks.")
             .defaultValue(32)
             .min(6)
-            .sliderRange(6, 1024)
-            .build());
-
-    private final Setting<Boolean> removeOutsideRenderDist = sgRender.add(new BoolSetting.Builder()
-            .name("remove-outside-render-distance")
-            .description("Remove cached block positions outside the render distance.")
+            .sliderRange(6,1024)
+            .build()
+    );
+    private final Setting<Boolean> removerenderdist = sgRender.add(new BoolSetting.Builder()
+            .name("RemoveOutsideRenderDistance")
+            .description("Removes the cached block positions when they leave the defined render distance.")
             .defaultValue(true)
-            .build());
-
+            .build()
+    );
     private final Setting<ShapeMode> shapeMode = sgRender.add(new EnumSetting.Builder<ShapeMode>()
             .name("shape-mode")
-            .description("How shapes are rendered.")
+            .description("How the shapes are rendered.")
             .defaultValue(ShapeMode.Both)
-            .build());
-
+            .build()
+    );
     private final Setting<SettingColor> spawnerSideColor = sgRender.add(new ColorSetting.Builder()
             .name("spawner-side-color")
-            .description("Color of the activated spawner sides.")
+            .description("Color of the activated spawner.")
             .defaultValue(new SettingColor(251, 5, 5, 70))
-            .visible(() -> shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both)
-            .build());
-
+            .visible(() -> (shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
     private final Setting<SettingColor> spawnerLineColor = sgRender.add(new ColorSetting.Builder()
             .name("spawner-line-color")
-            .description("Color of the activated spawner lines.")
+            .description("Color of the activated spawner.")
             .defaultValue(new SettingColor(251, 5, 5, 235))
-            .visible(() -> shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both)
-            .build());
+            .visible(() -> (shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> trialSideColor = sgRender.add(new ColorSetting.Builder()
+            .name("trial-side-color")
+            .description("Color of the activated trial spawner.")
+            .defaultValue(new SettingColor(255, 100, 0, 70))
+            .visible(() -> trialSpawner.get() && (shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> trialLineColor = sgRender.add(new ColorSetting.Builder()
+            .name("trial-line-color")
+            .description("Color of the activated trial spawner.")
+            .defaultValue(new SettingColor(255, 100, 0, 235))
+            .visible(() -> trialSpawner.get() && (shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> despawnerSideColor = sgRender.add(new ColorSetting.Builder()
+            .name("deactivated-spawner-side-color")
+            .description("Color of the spawner with torches.")
+            .defaultValue(new SettingColor(251, 5, 251, 70))
+            .visible(() -> deactivatedSpawner.get() && (shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> despawnerLineColor = sgRender.add(new ColorSetting.Builder()
+            .name("deactivated-spawner-line-color")
+            .description("Color of the spawner with torches.")
+            .defaultValue(new SettingColor(251, 5, 251, 235))
+            .visible(() -> deactivatedSpawner.get() && (shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<Boolean> rangerendering = sgRender.add(new BoolSetting.Builder()
+            .name("spawner-range-rendering")
+            .description("Renders the rough active range of a mob spawner block.")
+            .defaultValue(true)
+            .build()
+    );
+    private final Setting<SettingColor> rangeSideColor = sgRender.add(new ColorSetting.Builder()
+            .name("spawner-range-side-color")
+            .description("Color of the active spawner range.")
+            .defaultValue(new SettingColor(5, 178, 251, 30))
+            .visible(() -> rangerendering.get() && (shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> rangeLineColor = sgRender.add(new ColorSetting.Builder()
+            .name("spawner-range-line-color")
+            .description("Color of the active spawner range.")
+            .defaultValue(new SettingColor(5, 178, 251, 155))
+            .visible(() -> rangerendering.get() && (shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> trangeSideColor = sgRender.add(new ColorSetting.Builder()
+            .name("trial-range-side-color")
+            .description("Color of the active trial spawner range.")
+            .defaultValue(new SettingColor(150, 178, 251, 30))
+            .visible(() -> trialSpawner.get() && rangerendering.get() && (shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
+    private final Setting<SettingColor> trangeLineColor = sgRender.add(new ColorSetting.Builder()
+            .name("trial-range-line-color")
+            .description("Color of the active trial spawner range.")
+            .defaultValue(new SettingColor(150, 178, 251, 155))
+            .visible(() -> trialSpawner.get() && rangerendering.get() && (shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both))
+            .build()
+    );
 
     private final Set<BlockPos> spawnerPositions = Collections.synchronizedSet(new HashSet<>());
-    private final Set<BlockPos> trialSpawnerPositions = Collections.synchronizedSet(new HashSet<>());
+    private final Set<BlockPos> trialspawnerPositions = Collections.synchronizedSet(new HashSet<>());
     private final Set<BlockPos> deactivatedSpawnerPositions = Collections.synchronizedSet(new HashSet<>());
     private final Set<BlockPos> noRenderPositions = Collections.synchronizedSet(new HashSet<>());
 
-    private static final List<Block> LIGHT_BLOCKS = Arrays.asList(
-            Blocks.TORCH, Blocks.SOUL_TORCH, Blocks.REDSTONE_TORCH, Blocks.JACK_O_LANTERN,
-            Blocks.GLOWSTONE, Blocks.SHROOMLIGHT, Blocks.OCHRE_FROGLIGHT, Blocks.PEARLESCENT_FROGLIGHT,
-            Blocks.SEA_LANTERN, Blocks.LANTERN, Blocks.SOUL_LANTERN, Blocks.CAMPFIRE, Blocks.SOUL_CAMPFIRE
-    );
-
     public ActivatedSpawnerDetector() {
-        super(Trouser.Main, "ActivatedSpawnerDetector",
-                "Detects activated mob spawners and provides related information and visualization.");
+        super(Trouser.Main,"ActivatedSpawnerDetector", "Detects if a player has been near a mob spawner in the past. May be useful for finding player made stashes in dungeons, mineshafts, and other places.");
     }
-
     @Override
     public void onActivate() {
-        clearAllPositions();
-    }
-
-    @Override
-    public void onDeactivate() {
-        clearAllPositions();
-    }
-
-    private void clearAllPositions() {
         spawnerPositions.clear();
         deactivatedSpawnerPositions.clear();
         noRenderPositions.clear();
-        trialSpawnerPositions.clear();
+        trialspawnerPositions.clear();
     }
-
+    @Override
+    public void onDeactivate() {
+        spawnerPositions.clear();
+        deactivatedSpawnerPositions.clear();
+        noRenderPositions.clear();
+        trialspawnerPositions.clear();
+    }
     @EventHandler
     private void onPreTick(TickEvent.Pre event) {
         if (mc.world == null) return;
 
-        scanForSpawners();
-        if (removeOutsideRenderDist.get()) {
-            removeChunksOutsideRenderDistance();
-        }
-    }
-
-    private void scanForSpawners() {
-        int viewDistance = mc.options.getViewDistance().getValue();
-        assert mc.player != null;
-        ChunkPos playerChunk = new ChunkPos(mc.player.getBlockPos());
-
-        for (int chunkX = playerChunk.x - viewDistance; chunkX <= playerChunk.x + viewDistance; chunkX++) {
-            for (int chunkZ = playerChunk.z - viewDistance; chunkZ <= playerChunk.z + viewDistance; chunkZ++) {
-                assert mc.world != null;
+        int renderdistance = mc.options.getViewDistance().getValue();
+        ChunkPos playerChunkPos = new ChunkPos(mc.player.getBlockPos());
+        for (int chunkX = playerChunkPos.x - renderdistance; chunkX <= playerChunkPos.x + renderdistance; chunkX++) {
+            for (int chunkZ = playerChunkPos.z - renderdistance; chunkZ <= playerChunkPos.z + renderdistance; chunkZ++) {
                 WorldChunk chunk = mc.world.getChunk(chunkX, chunkZ);
-                processChunkBlockEntities(chunk);
+                List<BlockEntity> blockEntities = new ArrayList<>(chunk.getBlockEntities().values());
+
+                for (BlockEntity blockEntity : blockEntities) {
+                    if (blockEntity instanceof MobSpawnerBlockEntity){
+                        MobSpawnerBlockEntity spawner = (MobSpawnerBlockEntity) blockEntity;
+                        BlockPos pos = spawner.getPos();
+                        BlockPos playerPos = new BlockPos(mc.player.getBlockX(), pos.getY(), mc.player.getBlockZ());
+                        if (playerPos.isWithinDistance(pos, renderDistance.get() * 16) && !trialspawnerPositions.contains(pos) && !noRenderPositions.contains(pos) && !deactivatedSpawnerPositions.contains(pos) && !spawnerPositions.contains(pos) && spawner.getLogic().spawnDelay != 20) {
+                            if (mc.world.getRegistryKey() == World.NETHER && spawner.getLogic().spawnDelay == 0) return;
+                            if (spawner.getLogic().spawnEntry.getNbt().get("id") != null){
+                                String monster = spawner.getLogic().spawnEntry.getNbt().get("id").toString();
+                                if (monster != null){
+                                    if (monster.contains("zombie") || monster.contains("skeleton")) {
+                                        if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cDUNGEON§r Spawner! Block Position: " + pos));
+                                        else ChatUtils.sendMsg(Text.of("Detected Activated §cDUNGEON§r Spawner!"));
+                                    } else if (monster.contains(":spider")) {
+                                        if (mc.world.getBlockState(spawner.getPos().down()).getBlock() == Blocks.BIRCH_PLANKS){
+                                            if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cWOODLAND MANSION§r Spawner! Block Position: " + pos));
+                                            else ChatUtils.sendMsg(Text.of("Detected Activated §cWOODLAND MANSION§r Spawner!"));
+                                        } else {
+                                            if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cDUNGEON§r Spawner! Block Position: " + pos));
+                                            else ChatUtils.sendMsg(Text.of("Detected Activated §cDUNGEON§r Spawner!"));
+                                        }
+                                    } else if (monster.contains("cave_spider")) {
+                                        if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cMINESHAFT§r Spawner! Block Position: " + pos));
+                                        else ChatUtils.sendMsg(Text.of("Detected Activated §cMINESHAFT§r Spawner!"));
+                                    } else if (monster.contains("silverfish")) {
+                                        if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cSTRONGHOLD§r Spawner! Block Position: " + pos));
+                                        else ChatUtils.sendMsg(Text.of("Detected Activated §cSTRONGHOLD§r Spawner!"));
+                                    } else if (monster.contains("blaze")) {
+                                        if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cFORTRESS§r Spawner! Block Position: " + pos));
+                                        else ChatUtils.sendMsg(Text.of("Detected Activated §cFORTRESS§r Spawner!"));
+                                    } else if (monster.contains("magma")) {
+                                        if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cBASTION§r Spawner! Block Position: " + pos));
+                                        else ChatUtils.sendMsg(Text.of("Detected Activated §cBASTION§r Spawner!"));
+                                    } else {
+                                        if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated Spawner! Block Position: " + pos));
+                                        else ChatUtils.sendMsg(Text.of("Detected Activated Spawner!"));
+                                    }
+                                } else {
+                                    if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated Spawner! Block Position: " + pos));
+                                    else ChatUtils.sendMsg(Text.of("Detected Activated Spawner!"));
+                                }
+                            } else {
+                                if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated Spawner! Block Position: " + pos));
+                                else ChatUtils.sendMsg(Text.of("Detected Activated Spawner!"));
+                            }
+
+                            spawnerPositions.add(pos);
+                            if (deactivatedSpawner.get()){
+                                boolean lightsFound = false;
+                                for (int x = -deactivatedSpawnerdistance.get(); x < deactivatedSpawnerdistance.get()+1; x++) {
+                                    for (int y = -deactivatedSpawnerdistance.get(); y < deactivatedSpawnerdistance.get()+1; y++) {
+                                        for (int z = -deactivatedSpawnerdistance.get(); z < deactivatedSpawnerdistance.get()+1; z++) {
+                                            BlockPos bpos = new BlockPos(pos.getX()+x,pos.getY()+y,pos.getZ()+z);
+                                            if (mc.world.getBlockState(bpos).getBlock() == Blocks.TORCH || mc.world.getBlockState(bpos).getBlock() == Blocks.SOUL_TORCH || mc.world.getBlockState(bpos).getBlock() == Blocks.REDSTONE_TORCH || mc.world.getBlockState(bpos).getBlock() == Blocks.JACK_O_LANTERN || mc.world.getBlockState(bpos).getBlock() == Blocks.GLOWSTONE || mc.world.getBlockState(bpos).getBlock() == Blocks.SHROOMLIGHT || mc.world.getBlockState(bpos).getBlock() == Blocks.OCHRE_FROGLIGHT || mc.world.getBlockState(bpos).getBlock() == Blocks.PEARLESCENT_FROGLIGHT || mc.world.getBlockState(bpos).getBlock() == Blocks.PEARLESCENT_FROGLIGHT || mc.world.getBlockState(bpos).getBlock() == Blocks.SEA_LANTERN || mc.world.getBlockState(bpos).getBlock() == Blocks.LANTERN || mc.world.getBlockState(bpos).getBlock() == Blocks.SOUL_LANTERN || mc.world.getBlockState(bpos).getBlock() == Blocks.CAMPFIRE || mc.world.getBlockState(bpos).getBlock() == Blocks.SOUL_CAMPFIRE){
+                                                lightsFound = true;
+                                                deactivatedSpawnerPositions.add(pos);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (lightsFound == true) ChatUtils.sendMsg(Text.of("The Spawner has torches or other light blocks!"));
+                            }
+                            boolean chestfound = false;
+                            for (int x = -16; x < 17; x++) {
+                                for (int y = -16; y < 17; y++) {
+                                    for (int z = -16; z < 17; z++) {
+                                        BlockPos bpos = new BlockPos(pos.getX()+x, pos.getY()+y, pos.getZ()+z);
+                                        if (blocks.get().contains(mc.world.getBlockState(bpos).getBlock())) {
+                                            chestfound = true;
+                                            break;
+                                        }
+                                        Box box = new Box(bpos);
+                                        List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(ChestMinecartEntity.class, box, entity -> true);
+                                        if (!minecarts.isEmpty()) {
+                                            chestfound = true;
+                                            break;
+                                        }
+                                    }
+                                    if (chestfound) break;
+                                }
+                                if (chestfound) break;
+                            }
+                            if (!chestfound && lessRenderSpam.get()){
+                                spawnerPositions.remove(pos);
+                                noRenderPositions.add(pos);
+                            }
+                            if (lessSpam.get() && chestfound && extramessage.get()) error("There may be stashed items in the storage near the spawners!");
+                            else if (!lessSpam.get() && extramessage.get()) error("There may be stashed items in the storage near the spawners!");
+                        }
+                    }
+                    if (blockEntity instanceof TrialSpawnerBlockEntity){
+                        TrialSpawnerBlockEntity trialspawner = (TrialSpawnerBlockEntity) blockEntity;
+                        BlockPos tPos = trialspawner.getPos();
+                        BlockPos playerPos = new BlockPos(mc.player.getBlockX(), tPos.getY(), mc.player.getBlockZ());
+                        if (playerPos.isWithinDistance(tPos, renderDistance.get() * 16) && trialSpawner.get() && !trialspawnerPositions.contains(tPos) && !noRenderPositions.contains(tPos) && !deactivatedSpawnerPositions.contains(tPos) && !spawnerPositions.contains(tPos) && trialspawner.getSpawnerState() != TrialSpawnerState.WAITING_FOR_PLAYERS) {
+                            if (displaycoords.get()) ChatUtils.sendMsg(Text.of("Detected Activated §cTRIAL§r Spawner! Block Position: " + tPos));
+                            else ChatUtils.sendMsg(Text.of("Detected Activated §cTRIAL§r Spawner!"));
+                            trialspawnerPositions.add(tPos);
+                            boolean chestfound = false;
+                            for (int x = -14; x < 15; x++) {
+                                for (int y = -14; y < 15; y++) {
+                                    for (int z = -14; z < 15; z++) {
+                                        BlockPos bpos = new BlockPos(tPos.getX()+x, tPos.getY()+y, tPos.getZ()+z);
+                                        if (blocks.get().contains(mc.world.getBlockState(bpos).getBlock())) {
+                                            chestfound = true;
+                                            break;
+                                        }
+                                        Box box = new Box(bpos);
+                                        List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(ChestMinecartEntity.class, box, entity -> true);
+                                        if (!minecarts.isEmpty()) {
+                                            chestfound = true;
+                                            break;
+                                        }
+                                    }
+                                    if (chestfound) break;
+                                }
+                                if (chestfound) break;
+                            }
+                            if (!chestfound && lessRenderSpam.get()){
+                                trialspawnerPositions.remove(tPos);
+                                noRenderPositions.add(tPos);
+                            }
+                            if (lessSpam.get() && chestfound && extramessage.get()) error("There may be stashed items in the storage near the spawners!");
+                            else if (!lessSpam.get() && extramessage.get()) error("There may be stashed items in the storage near the spawners!");
+                        }
+                    }
+                }
             }
         }
+        if (removerenderdist.get())removeChunksOutsideRenderDistance();
     }
-
-    private void processChunkBlockEntities(WorldChunk chunk) {
-        for (BlockEntity blockEntity : chunk.getBlockEntities().values()) {
-            if (blockEntity instanceof MobSpawnerBlockEntity spawner) {
-                processMobSpawner(spawner);
-            } else if (blockEntity instanceof TrialSpawnerBlockEntity spawner && detectTrialSpawner.get()) {
-                processTrialSpawner(spawner);
+    @EventHandler
+    private void onRender(Render3DEvent event) {
+        if (spawnerSideColor.get().a > 5 || spawnerLineColor.get().a > 5 || rangeSideColor.get().a > 5 || rangeLineColor.get().a > 5) {
+            synchronized (spawnerPositions) {
+                for (BlockPos pos : spawnerPositions) {
+                    BlockPos playerPos = new BlockPos(mc.player.getBlockX(), pos.getY(), mc.player.getBlockZ());
+                    if (pos != null && playerPos.isWithinDistance(pos, renderDistance.get() * 16)) {
+                        int startX = pos.getX();
+                        int startY = pos.getY();
+                        int startZ = pos.getZ();
+                        int endX = pos.getX();
+                        int endY = pos.getY();
+                        int endZ = pos.getZ();
+                        if (rangerendering.get())render(new Box(new Vec3d(startX+17, startY+17, startZ+17), new Vec3d(endX-16, endY-16, endZ-16)), rangeSideColor.get(), rangeLineColor.get(), shapeMode.get(), event);
+                        if (deactivatedSpawnerPositions.contains(pos)) render(new Box(new Vec3d(startX+1, startY+1, startZ+1), new Vec3d(endX, endY, endZ)), despawnerSideColor.get(), despawnerLineColor.get(), shapeMode.get(), event);
+                        else render(new Box(new Vec3d(startX+1, startY+1, startZ+1), new Vec3d(endX, endY, endZ)), spawnerSideColor.get(), spawnerLineColor.get(), shapeMode.get(), event);
+                    }
+                }
             }
-        }
-    }
-
-    private void processMobSpawner(MobSpawnerBlockEntity spawner) {
-        BlockPos pos = spawner.getPos();
-        if (shouldProcessSpawner(pos)) return;
-        if (spawner.getLogic().spawnDelay == 20 || (Objects.requireNonNull(mc.world).getRegistryKey() == World.NETHER && spawner.getLogic().spawnDelay == 0)) return;
-
-        handleSpawnerDetection(pos, spawner);
-    }
-
-    private void processTrialSpawner(TrialSpawnerBlockEntity spawner) {
-        BlockPos pos = spawner.getPos();
-        if (shouldProcessSpawner(pos)) return;
-        if (spawner.getSpawnerState() == TrialSpawnerState.WAITING_FOR_PLAYERS) return;
-
-        handleTrialSpawnerDetection(pos);
-    }
-
-    private boolean shouldProcessSpawner(BlockPos pos) {
-        return isWithinRenderDistance(pos) || isAlreadyProcessed(pos);
-    }
-
-    private boolean isWithinRenderDistance(BlockPos pos) {
-        assert mc.player != null;
-        BlockPos playerPos = new BlockPos(mc.player.getBlockX(), pos.getY(), mc.player.getBlockZ());
-        return !playerPos.isWithinDistance(pos, renderDistance.get() * 16);
-    }
-
-    private boolean isAlreadyProcessed(BlockPos pos) {
-        return spawnerPositions.contains(pos) || trialSpawnerPositions.contains(pos) ||
-                noRenderPositions.contains(pos) || deactivatedSpawnerPositions.contains(pos);
-    }
-
-    private void handleSpawnerDetection(BlockPos pos, MobSpawnerBlockEntity spawner) {
-        String spawnerType = determineSpawnerType(spawner);
-        sendSpawnerDetectionMessage(pos, spawnerType);
-        spawnerPositions.add(pos);
-
-        if (detectDeactivatedSpawner.get()) {
-            checkForDeactivation(pos);
-        }
-
-        handleStorageDetection(pos);
-    }
-
-    private String determineSpawnerType(MobSpawnerBlockEntity spawner) {
-        var spawnEntry = spawner.getLogic().spawnEntry;
-        if (spawnEntry == null || spawnEntry.getNbt() == null || spawnEntry.getNbt().get("id") == null) return "Unknown";
-
-        String monster = spawnEntry.getNbt().getString("id");
-        if (monster.contains("zombie") || monster.contains("skeleton")) return "DUNGEON";
-        if (monster.contains(":spider")) {
-            assert mc.world != null;
-            return mc.world.getBlockState(spawner.getPos().down()).getBlock() == Blocks.BIRCH_PLANKS ? "WOODLAND MANSION" : "DUNGEON";
-        }
-        if (monster.contains("cave_spider")) return "MINESHAFT";
-        if (monster.contains("silverfish")) return "STRONGHOLD";
-        if (monster.contains("blaze")) return "FORTRESS";
-        if (monster.contains("magma")) return "BASTION";
-
-        return "Unknown";
-    }
-
-    private void sendSpawnerDetectionMessage(BlockPos pos, String type) {
-        String message = type.equals("Unknown") ? "Detected Activated Spawner!" : "Detected Activated §c" + type + "§r Spawner!";
-        if (displayCoords.get()) {
-            message += " Block Position: " + pos;
-        }
-        ChatUtils.sendMsg(Text.of(message));
-    }
-
-    private void checkForDeactivation(BlockPos pos) {
-        int distance = torchScanDistance.get();
-        for (int x = -distance; x <= distance; x++) {
-            for (int y = -distance; y <= distance; y++) {
-                for (int z = -distance; z <= distance; z++) {
-                    BlockPos checkPos = pos.add(x, y, z);
-                    assert mc.world != null;
-                    if (LIGHT_BLOCKS.contains(mc.world.getBlockState(checkPos).getBlock())) {
-                        deactivatedSpawnerPositions.add(pos);
-                        ChatUtils.sendMsg(Text.of("The spawner has torches or other light blocks!"));
-                        return;
+            synchronized (trialspawnerPositions) {
+                for (BlockPos pos : trialspawnerPositions) {
+                    BlockPos playerPos = new BlockPos(mc.player.getBlockX(), pos.getY(), mc.player.getBlockZ());
+                    if (pos != null && playerPos.isWithinDistance(pos, renderDistance.get() * 16)) {
+                        int startX = pos.getX();
+                        int startY = pos.getY();
+                        int startZ = pos.getZ();
+                        int endX = pos.getX();
+                        int endY = pos.getY();
+                        int endZ = pos.getZ();
+                        if (trialSpawner.get() && rangerendering.get())render(new Box(new Vec3d(startX+15, startY+15, startZ+15), new Vec3d(endX-14, endY-14, endZ-14)), trangeSideColor.get(), trangeLineColor.get(), shapeMode.get(), event);
+                        if (deactivatedSpawnerPositions.contains(pos)) render(new Box(new Vec3d(startX+1, startY+1, startZ+1), new Vec3d(endX, endY, endZ)), despawnerSideColor.get(), despawnerLineColor.get(), shapeMode.get(), event);
+                        else render(new Box(new Vec3d(startX+1, startY+1, startZ+1), new Vec3d(endX, endY, endZ)), trialSideColor.get(), trialLineColor.get(), shapeMode.get(), event);
                     }
                 }
             }
         }
     }
 
-    private void handleStorageDetection(BlockPos pos) {
-        if (hasNearbyStorage(pos)) {
-            if (extraMessage.get() && (!lessSpam.get() || hasNearbyStorage(pos))) {
-                ChatUtils.error("There may be stashed items in the storage near the spawners!");
-            }
-        } else if (lessRenderSpam.get()) {
-            spawnerPositions.remove(pos);
-            noRenderPositions.add(pos);
-        }
+    private void render(Box box, Color sides, Color lines, ShapeMode shapeMode, Render3DEvent event) {
+        event.renderer.box(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ, sides, lines, shapeMode, 0);
     }
-
-    private boolean hasNearbyStorage(BlockPos pos) {
-        for (int x = -16; x <= 16; x++) {
-            for (int y = -16; y <= 16; y++) {
-                for (int z = -16; z <= 16; z++) {
-                    if (isStorageBlock(pos.add(x, y, z))) return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean isStorageBlock(BlockPos pos) {
-        assert mc.world != null;
-        if (storageBlocks.get().contains(mc.world.getBlockState(pos).getBlock())) return true;
-        Box box = new Box(pos);
-        return !mc.world.getEntitiesByClass(ChestMinecartEntity.class, box, entity -> true).isEmpty();
-    }
-
-    private void handleTrialSpawnerDetection(BlockPos pos) {
-        String message = "Detected Activated §cTRIAL§r Spawner!";
-        if (displayCoords.get()) {
-            message += " Block Position: " + pos;
-        }
-        ChatUtils.sendMsg(Text.of(message));
-        trialSpawnerPositions.add(pos);
-        handleStorageDetection(pos);
-    }
-
     private void removeChunksOutsideRenderDistance() {
         double renderDistanceBlocks = renderDistance.get() * 16;
-        removePositionsOutsideRenderDistance(spawnerPositions, renderDistanceBlocks);
-        removePositionsOutsideRenderDistance(deactivatedSpawnerPositions, renderDistanceBlocks);
-        removePositionsOutsideRenderDistance(trialSpawnerPositions, renderDistanceBlocks);
-        removePositionsOutsideRenderDistance(noRenderPositions, renderDistanceBlocks);
-    }
 
-    private void removePositionsOutsideRenderDistance(Set<BlockPos> positions, double renderDistanceBlocks) {
-        positions.removeIf(this::isWithinRenderDistance);
+        removeChunksOutsideRenderDistance(spawnerPositions, renderDistanceBlocks);
+        removeChunksOutsideRenderDistance(deactivatedSpawnerPositions, renderDistanceBlocks);
+        removeChunksOutsideRenderDistance(trialspawnerPositions, renderDistanceBlocks);
+        removeChunksOutsideRenderDistance(noRenderPositions, renderDistanceBlocks);
+    }
+    private void removeChunksOutsideRenderDistance(Set<BlockPos> chunkSet, double renderDistanceBlocks) {
+        chunkSet.removeIf(blockPos -> {
+            BlockPos playerPos = new BlockPos(mc.player.getBlockX(), blockPos.getY(), mc.player.getBlockZ());
+            return !playerPos.isWithinDistance(blockPos, renderDistanceBlocks);
+        });
     }
 }
