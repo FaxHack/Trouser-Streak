@@ -8,14 +8,7 @@
     "defaultRequire": 1
   },
   "mixins": [
-    "InventoryScreenMixin",
-    "InventoryScreenMixinBow",
-    "ClientPlayerInteractionManagerMixin",
-    "LecternScreenMixin",
     "accessor.ClientConnectionAccessor",
-    "ShulkerBoxScreenMixin",
-    "PlayerEntityMixin",
-    "TrouserSplashTextMixin",
-    "TrouserHandshakeC2SMixin"
+    "PlayerEntityMixin"
   ]
 }
