@@ -19,6 +19,8 @@ public class Trouser extends MeteorAddon {
                 LOG.info("Initializing PantsMod!");
 
                 Modules.get().add(new ActivatedSpawnerDetector());
+                Modules.get().add(new CaveDisturbanceDetector());
+                Modules.get().add(new PortalPatternFinder());
                 Modules.get().add(new HoleAndTunnelAndStairsESP());
                 Modules.get().add(new NewerNewChunks());
                 Modules.get().add(new BaseFinder());
