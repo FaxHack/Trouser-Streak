@@ -18,6 +18,8 @@ import net.minecraft.block.Blocks;
 import net.minecraft.client.gui.screen.DisconnectedScreen;
 import net.minecraft.client.gui.screen.DownloadingTerrainScreen;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.network.packet.c2s.play.AcknowledgeChunksC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.network.packet.s2c.play.ChunkDataS2CPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.*;
@@ -32,33 +34,27 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class PortalPatternFinder extends Module {
-    // Settings Groups
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
-
-    // General Settings
-    private final Setting<Boolean> displayCoords = sgGeneral.add(new BoolSetting.Builder()
+    private final Setting<Boolean> displaycoords = sgGeneral.add(new BoolSetting.Builder()
             .name("DisplayCoords")
             .description("Displays coords of portal patterns in chat.")
             .defaultValue(true)
             .build()
     );
-
-    private final Setting<Boolean> ignoreCorners = sgGeneral.add(new BoolSetting.Builder()
+    private final Setting<Boolean> ignorecorners = sgGeneral.add(new BoolSetting.Builder()
             .name("ignore-corner-blocks")
             .description("Also matches portal patterns that are missing the corner blocks.")
             .defaultValue(true)
             .build()
     );
-
-    private final Setting<Boolean> falsePositivesRemoval = sgGeneral.add(new BoolSetting.Builder()
+    private final Setting<Boolean> falsepositives1 = sgGeneral.add(new BoolSetting.Builder()
             .name("False Positive Removal")
             .description("Removes false positives in relation to the air above and below the portal pattern.")
             .defaultValue(true)
             .build()
     );
-
-    private final Setting<Integer> nonAirPercent = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> nonAirPercent = sgGeneral.add(new IntSetting.Builder()
             .name("Non-Air Percent")
             .description("What percentage of the blocks in the portal shape can be non-air.")
             .defaultValue(20)
@@ -66,536 +62,480 @@ public class PortalPatternFinder extends Module {
             .sliderRange(0, 100)
             .build()
     );
-
-    private final Setting<Integer> adjacentAirPercent = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> percent = sgGeneral.add(new IntSetting.Builder()
             .name("Adjacent Air Percent")
             .description("What percentage of the blocks in the portal shape that is allowed to have air blocks adjacent to it.")
             .defaultValue(15)
             .min(0)
-            .sliderRange(0, 100)
+            .sliderRange(0,100)
             .build()
     );
-
-    private final Setting<Integer> portalWidth = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> pWidth = sgGeneral.add(new IntSetting.Builder()
             .name("Portal Width")
             .description("finds portals that are up to this large")
             .defaultValue(5)
             .min(4)
-            .sliderRange(4, 8)
+            .sliderRange(4,8)
             .build()
     );
-
-    private final Setting<Integer> portalHeight = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> pHeight = sgGeneral.add(new IntSetting.Builder()
             .name("Portal Height")
             .description("finds portals that are up to this large")
             .defaultValue(5)
             .min(5)
-            .sliderRange(5, 8)
+            .sliderRange(5,8)
             .build()
     );
-
-    // Render Settings
-    private final Setting<Boolean> removeOutsideRenderDist = sgRender.add(new BoolSetting.Builder()
+    private final Setting<Boolean> removerenderdist = sgRender.add(new BoolSetting.Builder()
             .name("RemoveOutsideRenderDistance")
             .description("Removes the cached portal patterns when they leave the defined render distance.")
             .defaultValue(true)
             .build()
     );
-
-    private final Setting<Integer> renderDistance = sgRender.add(new IntSetting.Builder()
+    public final Setting<Integer> renderDistance = sgRender.add(new IntSetting.Builder()
             .name("Render-Distance(Chunks)")
             .description("How many chunks from the character to render the portal patterns.")
             .defaultValue(32)
             .min(6)
-            .sliderRange(6, 1024)
+            .sliderRange(6,1024)
             .build()
     );
-
-    private final Setting<Boolean> tracers = sgRender.add(new BoolSetting.Builder()
+    private final Setting<Boolean> trcr = sgRender.add(new BoolSetting.Builder()
             .name("Tracers")
             .description("Show tracers to the portal patterns.")
             .defaultValue(true)
             .build()
     );
-
-    private final Setting<Boolean> nearestTracer = sgRender.add(new BoolSetting.Builder()
+    private final Setting<Boolean> nearesttrcr = sgRender.add(new BoolSetting.Builder()
             .name("Tracer to nearest Portal Only")
             .description("Show only one tracer to the nearest portal pattern.")
             .defaultValue(false)
             .build()
     );
-
     private final Setting<ShapeMode> shapeMode = sgRender.add(new EnumSetting.Builder<ShapeMode>()
             .name("shape-mode")
             .description("How the shapes are rendered.")
             .defaultValue(ShapeMode.Both)
             .build()
     );
-
     private final Setting<SettingColor> portalSideColor = sgRender.add(new ColorSetting.Builder()
             .name("possible-portal-side-color")
             .description("Color of possible portal locations.")
             .defaultValue(new SettingColor(170, 0, 255, 55))
-            .visible(() -> shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both)
+            .visible(() -> (shapeMode.get() == ShapeMode.Sides || shapeMode.get() == ShapeMode.Both))
             .build()
     );
-
     private final Setting<SettingColor> portalLineColor = sgRender.add(new ColorSetting.Builder()
             .name("possible-portal-line-color")
             .description("Color of possible portal locations.")
             .defaultValue(new SettingColor(170, 0, 255, 200))
-            .visible(() -> shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both || tracers.get())
+            .visible(() -> (shapeMode.get() == ShapeMode.Lines || shapeMode.get() == ShapeMode.Both || trcr.get()))
             .build()
     );
-
-    // State Variables
     private static final ExecutorService taskExecutor = Executors.newCachedThreadPool();
     private final Set<ChunkPos> scannedChunks = Collections.synchronizedSet(new HashSet<>());
     private final Set<Box> possiblePortalLocations = Collections.synchronizedSet(new HashSet<>());
-    private Vec3i closestPortal = new Vec3i(2000000000, 2000000000, 2000000000);
-    private double portalDistance = 2000000000;
+    private int closestPortalX=2000000000;
+    private int closestPortalY=2000000000;
+    private int closestPortalZ=2000000000;
+    private double PortalDistance=2000000000;
 
     public PortalPatternFinder() {
-        super(Trouser.Main, "PortalPatternFinder", "Scans for the shapes of broken/removed Nether Portals within the cave air blocks found in caves and underground structures in 1.13+ chunks. **May be useful for finding portal skips in the Nether**");
+        super(Trouser.Main,"PortalPatternFinder", "Scans for the shapes of broken/removed Nether Portals within the cave air blocks found in caves and underground structures in 1.13+ chunks. **May be useful for finding portal skips in the Nether**");
     }
 
     @Override
     public void onActivate() {
         clearChunkData();
-        scanAir();
+        scanTheAir();
     }
+    private void scanTheAir() {
+        if (mc.world == null) return;
+        int renderdistance = renderDistance.get();
+        ChunkPos playerChunkPos = new ChunkPos(mc.player.getBlockPos());
+        List<ChunkPos> chunksToProcess = new ArrayList<>();
 
+        for (int chunkX = playerChunkPos.x - renderdistance; chunkX <= playerChunkPos.x + renderdistance; chunkX++) {
+            for (int chunkZ = playerChunkPos.z - renderdistance; chunkZ <= playerChunkPos.z + renderdistance; chunkZ++) {
+                chunksToProcess.add(new ChunkPos(chunkX, chunkZ));
+            }
+        }
+
+        chunksToProcess.parallelStream().forEach(chunkPos -> {
+            WorldChunk chunk = mc.world.getChunk(chunkPos.x, chunkPos.z);
+            if (chunk != null && !scannedChunks.contains(chunk.getPos())) {
+                processChunk(chunk);
+                scannedChunks.add(chunk.getPos());
+            }
+        });
+    }
     @Override
     public void onDeactivate() {
         clearChunkData();
     }
-
-    private void clearChunkData() {
+    @EventHandler
+    private void onScreenOpen(OpenScreenEvent event) {
+        if (event.screen instanceof DisconnectedScreen || event.screen instanceof DownloadingTerrainScreen) clearChunkData();
+    }
+    @EventHandler
+    private void onGameLeft(GameLeftEvent event) {
+        clearChunkData();
+    }
+    private void clearChunkData(){
         scannedChunks.clear();
         possiblePortalLocations.clear();
-        closestPortal = new Vec3i(2000000000, 2000000000, 2000000000);
-        portalDistance = 2000000000;
+        closestPortalX=2000000000;
+        closestPortalY=2000000000;
+        closestPortalZ=2000000000;
+        PortalDistance=2000000000;
     }
-
-    private void scanAir() {
-        if (mc.world == null) return;
-
-        ChunkPos playerChunkPos = new ChunkPos(mc.player.getBlockPos());
-        int distance = renderDistance.get();
-
-        List<ChunkPos> chunksToProcess = new ArrayList<>();
-        for (int x = playerChunkPos.x - distance; x <= playerChunkPos.x + distance; x++) {
-            for (int z = playerChunkPos.z - distance; z <= playerChunkPos.z + distance; z++) {
-                chunksToProcess.add(new ChunkPos(x, z));
+    @EventHandler
+    private void onPreTick(TickEvent.Pre event) {
+        if (nearesttrcr.get()){
+            try {
+                if (possiblePortalLocations.stream().toList().size() > 0) {
+                    for (int b = 0; b < possiblePortalLocations.stream().toList().size(); b++) {
+                        if (PortalDistance > Math.sqrt(Math.pow(possiblePortalLocations.stream().toList().get(b).getCenter().x-1 - mc.player.getBlockX(), 2) + Math.pow(possiblePortalLocations.stream().toList().get(b).getCenter().z-1 - mc.player.getBlockZ(), 2))) {
+                            closestPortalX = Math.round((float) possiblePortalLocations.stream().toList().get(b).getCenter().x-1);
+                            closestPortalY = Math.round((float) possiblePortalLocations.stream().toList().get(b).getCenter().y-1);
+                            closestPortalZ = Math.round((float) possiblePortalLocations.stream().toList().get(b).getCenter().z-1);
+                            PortalDistance = Math.sqrt(Math.pow(possiblePortalLocations.stream().toList().get(b).getCenter().x-1 - mc.player.getBlockX(), 2) + Math.pow(possiblePortalLocations.stream().toList().get(b).getCenter().z-1 - mc.player.getBlockZ(), 2));
+                        }
+                    }
+                    PortalDistance = 2000000000;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
             }
         }
-
-        chunksToProcess.parallelStream().forEach(this::processChunkIfUnscanned);
+        if (removerenderdist.get())removeChunksOutsideRenderDistance();
     }
+    @EventHandler
+    private void onReadPacket(PacketEvent.Receive event) {
+        if (event.packet instanceof AcknowledgeChunksC2SPacket)return; //for some reason this packet keeps getting cast to other packets
+        if (!(event.packet instanceof AcknowledgeChunksC2SPacket) && !(event.packet instanceof PlayerMoveC2SPacket) && event.packet instanceof ChunkDataS2CPacket packet && mc.world != null) {
+            ChunkPos playerActivityPos = new ChunkPos(packet.getChunkX(), packet.getChunkZ());
 
-    private void processChunkIfUnscanned(ChunkPos chunkPos) {
-        WorldChunk chunk = mc.world.getChunk(chunkPos.x, chunkPos.z);
-        if (chunk != null && !scannedChunks.contains(chunk.getPos())) {
-            processChunk(chunk);
-            scannedChunks.add(chunk.getPos());
+            if (mc.world.getChunkManager().getChunk(packet.getChunkX(), packet.getChunkZ()) == null) {
+                WorldChunk chunk = new WorldChunk(mc.world, playerActivityPos);
+                try {
+                    CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                        chunk.loadFromPacket(packet.getChunkData().getSectionsDataBuf(), new NbtCompound(),
+                                packet.getChunkData().getBlockEntities(packet.getChunkX(), packet.getChunkZ()));
+                    }, taskExecutor);
+                    future.join();
+                } catch (CompletionException e) {}
+                if (chunk != null && !scannedChunks.contains(chunk.getPos())) {
+                    processChunk(chunk);
+                    scannedChunks.add(chunk.getPos());
+                }
+            }
         }
     }
 
     private void processChunk(WorldChunk chunk) {
         int minY = mc.world.getBottomY();
-        int maxY = mc.world.getRegistryKey() == World.NETHER ? 126 : 180;
+        int maxY = 180;
+        if (mc.world.getRegistryKey() == World.NETHER) maxY = 126;
 
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 for (int y = minY; y <= maxY; y++) {
-                    BlockPos pos = new BlockPos(
-                            chunk.getPos().getStartX() + x,
-                            y,
-                            chunk.getPos().getStartZ() + z
-                    );
-                    if (chunk.getBlockState(pos).getBlock() == Blocks.CAVE_AIR) {
-                        checkSurroundingAir(pos);
+                    BlockPos blockPos = new BlockPos(chunk.getPos().getStartX() + x, y, chunk.getPos().getStartZ() + z);
+                    BlockState blockState = chunk.getBlockState(blockPos);
+
+                    if (blockState.getBlock() == Blocks.CAVE_AIR) {
+                        isSurroundingBlockRegAir(blockPos);
                     }
                 }
             }
         }
     }
 
-    private void checkSurroundingAir(BlockPos center) {
-        BlockPos[] directions = {
-                center.north(), center.south(),
-                center.west(), center.east()
-        };
-        BlockPos[] adjacentBlocks = {
-                center.north().north(),
-                center.south().south(),
-                center.west().west(),
-                center.east().east()
-        };
-
-        for (int i = 0; i < directions.length; i++) {
-            if (isAirBlock(directions[i]) && !isAirBlock(adjacentBlocks[i])) {
-                findAirShape(directions[i]);
+    private void isSurroundingBlockRegAir(BlockPos bPos) {
+        BlockPos airPos=bPos.north();
+        BlockPos blockPastTheAir=bPos.north().add(0, 0, -1);
+        for (int dir = 1; dir <= 4; dir++) {
+            switch (dir) {
+                case 1 -> {
+                    airPos = bPos.north();
+                    blockPastTheAir = bPos.north().add(0, 0, -1);
+                }
+                case 2 -> {
+                    airPos = bPos.south();
+                    blockPastTheAir = bPos.south().add(0, 0, 1);
+                }
+                case 3 -> {
+                    airPos = bPos.west();
+                    blockPastTheAir = bPos.west().add(-1, 0, 0);
+                }
+                case 4 -> {
+                    airPos = bPos.east();
+                    blockPastTheAir = bPos.east().add(1, 0, 0);
+                }
             }
-        }
-    }
-
-    private boolean isAirBlock(BlockPos pos) {
-        return mc.world.getBlockState(pos).getBlock() == Blocks.AIR;
-    }
-
-    @EventHandler
-    private void onScreenOpen(OpenScreenEvent event) {
-        if (event.screen instanceof DisconnectedScreen ||
-                event.screen instanceof DownloadingTerrainScreen) {
-            clearChunkData();
-        }
-    }
-
-    @EventHandler
-    private void onGameLeft(GameLeftEvent event) {
-        clearChunkData();
-    }
-
-    @EventHandler
-    private void onPreTick(TickEvent.Pre event) {
-        updateClosestPortal();
-        if (removeOutsideRenderDist.get()) {
-            removeChunksOutsideRenderDistance();
-        }
-    }
-
-    private void updateClosestPortal() {
-        if (!nearestTracer.get() || possiblePortalLocations.isEmpty()) return;
-
-        portalDistance = 2000000000;
-        for (Box box : possiblePortalLocations) {
-            double distance = Math.sqrt(
-                    Math.pow(box.getCenter().x - 1 - mc.player.getBlockX(), 2) +
-                            Math.pow(box.getCenter().z - 1 - mc.player.getBlockZ(), 2)
-            );
-
-            if (distance < portalDistance) {
-                closestPortal = new Vec3i(
-                        (int) (box.getCenter().x - 1),
-                        (int) (box.getCenter().y - 1),
-                        (int) (box.getCenter().z - 1)
-                );
-                portalDistance = distance;
-            }
-        }
-    }
-
-    @EventHandler
-    private void onReadPacket(PacketEvent.Receive event) {
-        if (!(event.packet instanceof ChunkDataS2CPacket packet) || mc.world == null) return;
-
-        processNewChunkPacket(packet);
-    }
-
-    private void processNewChunkPacket(ChunkDataS2CPacket packet) {
-        ChunkPos chunkPos = new ChunkPos(packet.getChunkX(), packet.getChunkZ());
-        if (mc.world.getChunkManager().getChunk(packet.getChunkX(), packet.getChunkZ()) != null) return;
-
-        WorldChunk chunk = new WorldChunk(mc.world, chunkPos);
-        try {
-            CompletableFuture.runAsync(() -> {
-                chunk.loadFromPacket(
-                        packet.getChunkData().getSectionsDataBuf(),
-                        new NbtCompound(),
-                        packet.getChunkData().getBlockEntities(packet.getChunkX(), packet.getChunkZ())
-                );
-            }, taskExecutor).join();
-        } catch (CompletionException e) {
-            return;
-        }
-
-        if (!scannedChunks.contains(chunk.getPos())) {
-            processChunk(chunk);
-            scannedChunks.add(chunk.getPos());
+            if (mc.world.getBlockState(airPos).getBlock() == Blocks.AIR && mc.world.getBlockState(blockPastTheAir).getBlock() != Blocks.AIR) findAirShape(airPos);
         }
     }
 
     private void findAirShape(BlockPos pos) {
-        findEastWestPortals(pos);
-        findNorthSouthPortals(pos);
-    }
+        final int squareWidth = pWidth.get();
+        final int squareHeight = pHeight.get();
+        int areaWidth = (squareWidth / 2) + 1;
+        int areaHeight = (squareHeight / 2) + 1;
 
-    private void findEastWestPortals(BlockPos pos) {
-        List<BlockPos> airBlocks = new ArrayList<>();
-        int rejects = 0;
-        int nonAirRejects = 0;
-
-        collectEastWestBlocks(pos, airBlocks, rejects, nonAirRejects);
-        processPortalShape(airBlocks, rejects, nonAirRejects, true);
-    }
-
-    private void findNorthSouthPortals(BlockPos pos) {
-        List<BlockPos> airBlocks = new ArrayList<>();
-        int rejects = 0;
-        int nonAirRejects = 0;
-
-        collectNorthSouthBlocks(pos, airBlocks, rejects, nonAirRejects);
-        processPortalShape(airBlocks, rejects, nonAirRejects, false);
-    }
-
-    private void collectEastWestBlocks(BlockPos pos, List<BlockPos> airBlocks, int rejects, int nonAirRejects) {
-        int areaWidth = (portalWidth.get() / 2) + 1;
-        int areaHeight = (portalHeight.get() / 2) + 1;
+        List<BlockPos> AirBlockPatternWEast = new ArrayList<>();
+        List<BlockPos> AirBlockPatternNouth = new ArrayList<>();
+        int AirBlockPatternWEastREJECT = 0;
+        int AirBlockPatternNouthREJECT = 0;
+        int AirBlockPatternWEastREJECT2 = 0;
+        int AirBlockPatternNouthREJECT2 = 0;
 
         for (int x = -areaWidth; x <= areaWidth; x++) {
             for (int y = -areaHeight; y <= areaHeight; y++) {
-                BlockPos checkPos = pos.add(x, y, 0);
-                BlockState state = mc.world.getBlockState(checkPos);
-                if (state.getBlock() == Blocks.AIR) {
-                    int nonAirSides = countNonAirSides(checkPos, true);
-                    if (nonAirSides >= 2) {
-                        airBlocks.add(checkPos);
-                    } else {
-                        rejects++;
-                        airBlocks.add(checkPos);
+                BlockPos bPos = new BlockPos(pos.getX() + x, pos.getY() + y, pos.getZ());
+                if (mc.world.getBlockState(bPos).getBlock() == Blocks.AIR) {
+                    int nonairblockonsides = 0;
+                    BlockPos[] surroundingPositions = new BlockPos[] {
+                            bPos.north(),
+                            bPos.south()
+                    };
+                    for (BlockPos posi : surroundingPositions) {
+                        if (mc.world.getBlockState(posi).getBlock() != Blocks.AIR) {
+                            nonairblockonsides++;
+                        }
                     }
-                } else if (state.getBlock() != Blocks.CAVE_AIR) {
-                    nonAirRejects++;
-                    airBlocks.add(checkPos);
+                    if (nonairblockonsides>=2)AirBlockPatternWEast.add(bPos);
+                    else {
+                        AirBlockPatternWEastREJECT++;
+                        AirBlockPatternWEast.add(bPos);
+                    }
+                } else if (mc.world.getBlockState(bPos).getBlock() != Blocks.AIR && mc.world.getBlockState(bPos).getBlock() != Blocks.CAVE_AIR) {
+                    AirBlockPatternWEastREJECT2++;
+                    AirBlockPatternWEast.add(bPos);
                 }
             }
         }
-    }
-
-    private void collectNorthSouthBlocks(BlockPos pos, List<BlockPos> airBlocks, int rejects, int nonAirRejects) {
-        int areaWidth = (portalWidth.get() / 2) + 1;
-        int areaHeight = (portalHeight.get() / 2) + 1;
-
         for (int z = -areaWidth; z <= areaWidth; z++) {
             for (int y = -areaHeight; y <= areaHeight; y++) {
-                BlockPos checkPos = pos.add(0, y, z);
-                BlockState state = mc.world.getBlockState(checkPos);
-                if (state.getBlock() == Blocks.AIR) {
-                    int nonAirSides = countNonAirSides(checkPos, false);
-                    if (nonAirSides >= 2) {
-                        airBlocks.add(checkPos);
-                    } else {
-                        rejects++;
-                        airBlocks.add(checkPos);
+                BlockPos bPos = new BlockPos(pos.getX(), pos.getY() + y, pos.getZ() + z);
+                if (mc.world.getBlockState(bPos).getBlock() == Blocks.AIR) {
+                    int nonairblockonsides = 0;
+                    BlockPos[] surroundingPositions = new BlockPos[] {
+                            bPos.west(),
+                            bPos.east()
+                    };
+                    for (BlockPos posi : surroundingPositions) {
+                        if (mc.world.getBlockState(posi).getBlock() != Blocks.AIR) {
+                            nonairblockonsides++;
+                        }
                     }
-                } else if (state.getBlock() != Blocks.CAVE_AIR) {
-                    nonAirRejects++;
-                    airBlocks.add(checkPos);
+                    if (nonairblockonsides>=2)AirBlockPatternNouth.add(bPos);
+                    else {
+                        AirBlockPatternNouthREJECT++;
+                        AirBlockPatternNouth.add(bPos);
+                    }
+                } else if (mc.world.getBlockState(bPos).getBlock() != Blocks.AIR && mc.world.getBlockState(bPos).getBlock() != Blocks.CAVE_AIR) {
+                    AirBlockPatternNouthREJECT2++;
+                    AirBlockPatternNouth.add(bPos);
+                }
+            }
+        }
+
+        if (((double) AirBlockPatternWEastREJECT2 / (AirBlockPatternWEast.size()-AirBlockPatternWEastREJECT)) * 100 <= nonAirPercent.get() && ((double) AirBlockPatternWEastREJECT / AirBlockPatternWEast.size()) * 100 <= percent.get()) {
+            for (BlockPos block : AirBlockPatternWEast) {
+                for (int currentWidth = 4; currentWidth <= squareWidth; currentWidth++) {
+                    for (int currentHeight = 5; currentHeight <= squareHeight; currentHeight++) {
+                        if (isValidWEastPortalShape(AirBlockPatternWEast, block, currentWidth, currentHeight)) {
+                            BlockPos boxStart = block;
+                            BlockPos boxEnd = new BlockPos(boxStart.getX() + currentWidth - 1, boxStart.getY() + currentHeight - 1, boxStart.getZ());
+                            boolean airfoundaboveorbelow = false;
+
+                            if (falsepositives1.get()) {
+                                for (int x = 0; x < currentWidth; x++) {
+                                    BlockPos blockPos = boxStart.add(x, -1, 0);
+                                    if (mc.world.getBlockState(blockPos).getBlock() == Blocks.AIR) airfoundaboveorbelow = true;
+                                }
+                                for (int x = 0; x < currentWidth; x++) {
+                                    BlockPos blockPos = boxStart.add(x, currentHeight + 1, 0);
+                                    if (mc.world.getBlockState(blockPos).getBlock() == Blocks.AIR) airfoundaboveorbelow = true;
+                                }
+                                if (airfoundaboveorbelow) continue;
+                            }
+
+                            Box portalBox = new Box(
+                                    new Vec3d(boxStart.getX(), boxStart.getY(), boxStart.getZ()),
+                                    new Vec3d(boxEnd.getX() + 1, boxEnd.getY() + 1, boxEnd.getZ() + 1)
+                            );
+
+                            boolean intersects = false;
+                            for (Box existingBox : possiblePortalLocations) {
+                                if (portalBox.intersects(existingBox)) {
+                                    intersects = true;
+                                    break;
+                                }
+                            }
+
+                            if (!intersects) portalFound(portalBox);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (((double) AirBlockPatternNouthREJECT2 / (AirBlockPatternNouth.size()-AirBlockPatternNouthREJECT)) * 100 <= nonAirPercent.get() && ((double) AirBlockPatternNouthREJECT / AirBlockPatternNouth.size()) * 100 <= percent.get()) {
+            for (BlockPos block : AirBlockPatternNouth) {
+                for (int currentWidth = 4; currentWidth <= squareWidth; currentWidth++) {
+                    for (int currentHeight = 5; currentHeight <= squareHeight; currentHeight++) {
+                        if (isValidNouthPortalShape(AirBlockPatternNouth, block, currentWidth, currentHeight)) {
+                            BlockPos boxStart = block;
+                            BlockPos boxEnd = new BlockPos(boxStart.getX(), boxStart.getY() + currentHeight - 1, boxStart.getZ() + currentWidth - 1);
+                            boolean airfoundaboveorbelow = false;
+
+                            if (falsepositives1.get()) {
+                                for (int z = 0; z < currentWidth; z++) {
+                                    BlockPos blockPos = boxStart.add(0, -1, z);
+                                    if (mc.world.getBlockState(blockPos).getBlock() == Blocks.AIR)
+                                        airfoundaboveorbelow = true;
+                                }
+                                for (int z = 0; z < currentWidth; z++) {
+                                    BlockPos blockPos = boxStart.add(0, currentHeight + 1, z);
+                                    if (mc.world.getBlockState(blockPos).getBlock() == Blocks.AIR)
+                                        airfoundaboveorbelow = true;
+                                }
+                                if (airfoundaboveorbelow) continue;
+                            }
+
+                            Box portalBox = new Box(
+                                    new Vec3d(boxStart.getX(), boxStart.getY(), boxStart.getZ()),
+                                    new Vec3d(boxEnd.getX() + 1, boxEnd.getY() + 1, boxEnd.getZ() + 1)
+                            );
+
+                            boolean intersects = false;
+                            for (Box existingBox : possiblePortalLocations) {
+                                if (portalBox.intersects(existingBox)) {
+                                    intersects = true;
+                                    break;
+                                }
+                            }
+
+                            if (!intersects) portalFound(portalBox);
+                        }
+                    }
                 }
             }
         }
     }
-
-    private int countNonAirSides(BlockPos pos, boolean eastWest) {
-        int count = 0;
-        BlockPos[] sides = eastWest ?
-                new BlockPos[]{pos.north(), pos.south()} :
-                new BlockPos[]{pos.west(), pos.east()};
-
-        for (BlockPos side : sides) {
-            if (mc.world.getBlockState(side).getBlock() != Blocks.AIR) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private void processPortalShape(List<BlockPos> airBlocks, int rejects, int nonAirRejects, boolean eastWest) {
-        double nonAirRatio = ((double) nonAirRejects / (airBlocks.size() - rejects)) * 100;
-        double rejectRatio = ((double) rejects / airBlocks.size()) * 100;
-
-        if (nonAirRatio <= nonAirPercent.get() && rejectRatio <= adjacentAirPercent.get()) {
-            for (BlockPos block : airBlocks) {
-                checkPortalDimensions(block, airBlocks, eastWest);
-            }
-        }
-    }
-
-    private void checkPortalDimensions(BlockPos startBlock, List<BlockPos> airBlocks, boolean eastWest) {
-        for (int width = 4; width <= portalWidth.get(); width++) {
-            for (int height = 5; height <= portalHeight.get(); height++) {
-                if (isValidPortalShape(airBlocks, startBlock, width, height, eastWest)) {
-                    addPortalBox(startBlock, width, height, eastWest);
-                }
-            }
-        }
-    }
-
-    private void addPortalBox(BlockPos start, int width, int height, boolean eastWest) {
-        BlockPos end = eastWest ?
-                new BlockPos(start.getX() + width - 1, start.getY() + height - 1, start.getZ()) :
-                new BlockPos(start.getX(), start.getY() + height - 1, start.getZ() + width - 1);
-
-        if (falsePositivesRemoval.get() && hasAdjacentAir(start, width, height, eastWest)) {
-            return;
-        }
-
-        Box portalBox = new Box(
-                new Vec3d(start.getX(), start.getY(), start.getZ()),
-                new Vec3d(end.getX() + 1, end.getY() + 1, end.getZ() + 1)
-        );
-
-        if (!intersectsExistingPortals(portalBox)) {
-            possiblePortalLocations.add(portalBox);
-            notifyPortalFound(portalBox);
-        }
-    }
-
-    private boolean hasAdjacentAir(BlockPos start, int width, int height, boolean eastWest) {
-        for (int i = 0; i < width; i++) {
-            BlockPos lower = eastWest ?
-                    start.add(i, -1, 0) :
-                    start.add(0, -1, i);
-            BlockPos upper = eastWest ?
-                    start.add(i, height + 1, 0) :
-                    start.add(0, height + 1, i);
-
-            if (isAirBlock(lower) || isAirBlock(upper)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean intersectsExistingPortals(Box newBox) {
-        for (Box existingBox : possiblePortalLocations) {
-            if (newBox.intersects(existingBox)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void notifyPortalFound(Box portalBox) {
-        if (displayCoords.get()) {
+    private void portalFound(Box portalBox){
+        possiblePortalLocations.add(portalBox);
+        if (displaycoords.get())
             ChatUtils.sendMsg(Text.of("Possible portal found: " + portalBox.getCenter()));
-        } else {
-            ChatUtils.sendMsg(Text.of("Possible portal found!"));
-        }
+        else if (!displaycoords.get()) ChatUtils.sendMsg(Text.of("Possible portal found!"));
     }
 
-    private boolean isValidPortalShape(List<BlockPos> portalBlocks, BlockPos startBlock, int width, int height, boolean eastWest) {
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                BlockPos checkPos = eastWest ?
-                        startBlock.add(x, y, 0) :
-                        startBlock.add(0, y, x);
+    private boolean isValidWEastPortalShape(List<BlockPos> portalBlocks, BlockPos startBlock, Integer squareWidth, Integer squareHeight) {
+        for (int currentWidth = 4; currentWidth <= squareWidth; currentWidth++) {
+            for (int currentHeight = 5; currentHeight <= squareHeight; currentHeight++) {
+                boolean validShape = true;
 
-                if (ignoreCorners.get() && isCornerBlock(x, y, width, height)) {
-                    continue;
+                for (int dx = 0; dx < currentWidth; dx++) {
+                    for (int dy = 0; dy < currentHeight; dy++) {
+                        BlockPos checkPos = startBlock.add(dx, dy, 0);
+
+                        if (ignorecorners.get() && ((dx == 0 && dy == 0) || (dx == currentWidth - 1 && dy == 0) ||
+                                (dx == 0 && dy == currentHeight - 1) || (dx == currentWidth - 1 && dy == currentHeight - 1))) {
+                            continue;
+                        }
+
+                        if (!portalBlocks.contains(checkPos)) {
+                            validShape = false;
+                            break;
+                        }
+                    }
+                    if (!validShape) break;
                 }
 
-                if (!portalBlocks.contains(checkPos)) {
-                    return false;
-                }
+                if (validShape) return true;
             }
         }
-        return true;
+        return false;
     }
 
-    private boolean isCornerBlock(int x, int y, int width, int height) {
-        return (x == 0 && y == 0) ||
-                (x == width - 1 && y == 0) ||
-                (x == 0 && y == height - 1) ||
-                (x == width - 1 && y == height - 1);
+    private boolean isValidNouthPortalShape(List<BlockPos> portalBlocks, BlockPos startBlock, Integer squareWidth, Integer squareHeight) {
+        for (int currentWidth = 4; currentWidth <= squareWidth; currentWidth++) {
+            for (int currentHeight = 5; currentHeight <= squareHeight; currentHeight++) {
+                boolean validShape = true;
+
+                for (int dz = 0; dz < currentWidth; dz++) {
+                    for (int dy = 0; dy < currentHeight; dy++) {
+                        BlockPos checkPos = startBlock.add(0, dy, dz);
+
+                        if (ignorecorners.get() && ((dz == 0 && dy == 0) || (dz == currentWidth - 1 && dy == 0) ||
+                                (dz == 0 && dy == currentHeight - 1) || (dz == currentWidth - 1 && dy == currentHeight - 1))) {
+                            continue;
+                        }
+
+                        if (!portalBlocks.contains(checkPos)) {
+                            validShape = false;
+                            break;
+                        }
+                    }
+                    if (!validShape) break;
+                }
+
+                if (validShape) return true;
+            }
+        }
+        return false;
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        if (portalSideColor.get().a <= 5 && portalLineColor.get().a <= 5) return;
-
-        synchronized (possiblePortalLocations) {
-            renderPortals(event);
-            if (nearestTracer.get()) {
-                renderClosestPortal(event);
+        if (portalSideColor.get().a > 5 || portalLineColor.get().a > 5) {
+            synchronized (possiblePortalLocations) {
+                if (!nearesttrcr.get()) {
+                    for (Box box : possiblePortalLocations) {
+                        BlockPos playerPos = new BlockPos(mc.player.getBlockX(), Math.round((float)box.getCenter().getY()), mc.player.getBlockZ());
+                        if (box != null && playerPos.isWithinDistance(box.getCenter(), renderDistance.get() * 16)) {
+                            render(box, portalSideColor.get(), portalLineColor.get(), shapeMode.get(), event);
+                        }
+                    }
+                } else if (nearesttrcr.get()) {
+                    for (Box box : possiblePortalLocations) {
+                        BlockPos playerPos = new BlockPos(mc.player.getBlockX(), Math.round((float)box.getCenter().getY()), mc.player.getBlockZ());
+                        if (box != null && playerPos.isWithinDistance(box.getCenter(), renderDistance.get() * 16)) {
+                            render(box, portalSideColor.get(), portalLineColor.get(), shapeMode.get(), event);
+                        }
+                    }
+                    render2(new Box(new Vec3d(closestPortalX, closestPortalY, closestPortalZ), new Vec3d (closestPortalX, closestPortalY, closestPortalZ)), portalSideColor.get(), portalLineColor.get(),ShapeMode.Sides, event);
+                }
             }
         }
     }
-
-    private void renderPortals(Render3DEvent event) {
-        for (Box box : possiblePortalLocations) {
-            if (isWithinRenderDistance(box)) {
-                renderPortalBox(event, box);
-            }
-        }
+    private void render(Box box, Color sides, Color lines, ShapeMode shapeMode, Render3DEvent event) {
+        if (trcr.get() && Math.abs(box.minX- RenderUtils.center.x)<=renderDistance.get()*16 && Math.abs(box.minZ-RenderUtils.center.z)<=renderDistance.get()*16)
+            if (!nearesttrcr.get())
+                event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, box.minX+0.5, box.minY+((box.maxY-box.minY)/2), box.minZ+0.5, lines);
+        event.renderer.box(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ, sides, new Color(0,0,0,0), shapeMode, 0);
     }
-
-    private void renderPortalBox(Render3DEvent event, Box box) {
-        if (tracers.get() && isWithinTracerRange(box)) {
-            if (!nearestTracer.get()) {
-                renderTracer(event, box);
-            }
-        }
-        event.renderer.box(
-                box.minX, box.minY, box.minZ,
-                box.maxX, box.maxY, box.maxZ,
-                portalSideColor.get(),
-                new Color(0, 0, 0, 0),
-                shapeMode.get(),
-                0
-        );
+    private void render2(Box box, Color sides, Color lines, ShapeMode shapeMode, Render3DEvent event) {
+        if (trcr.get() && Math.abs(box.minX-RenderUtils.center.x)<=renderDistance.get()*16 && Math.abs(box.minZ-RenderUtils.center.z)<=renderDistance.get()*16)
+            event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, box.minX+0.5, box.minY+((box.maxY-box.minY)/2), box.minZ+0.5, lines);
+        event.renderer.box(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ, sides, new Color(0,0,0,0), shapeMode, 0);
     }
-
-    private void renderClosestPortal(Render3DEvent event) {
-        Box box = new Box(
-                new Vec3d(closestPortal.getX(), closestPortal.getY(), closestPortal.getZ()),
-                new Vec3d(closestPortal.getX(), closestPortal.getY(), closestPortal.getZ())
-        );
-        renderPortalBox(event, box);
-    }
-
-    private void renderTracer(Render3DEvent event, Box box) {
-        event.renderer.line(
-                RenderUtils.center.x,
-                RenderUtils.center.y,
-                RenderUtils.center.z,
-                box.minX + 0.5,
-                box.minY + ((box.maxY - box.minY) / 2),
-                box.minZ + 0.5,
-                portalLineColor.get()
-        );
-    }
-
-    private boolean isWithinRenderDistance(Box box) {
-        BlockPos playerPos = new BlockPos(
-                mc.player.getBlockX(),
-                Math.round((float) box.getCenter().getY()),
-                mc.player.getBlockZ()
-        );
-        return playerPos.isWithinDistance(box.getCenter(), renderDistance.get() * 16);
-    }
-
-    private boolean isWithinTracerRange(Box box) {
-        return Math.abs(box.minX - RenderUtils.center.x) <= renderDistance.get() * 16 &&
-                Math.abs(box.minZ - RenderUtils.center.z) <= renderDistance.get() * 16;
-    }
-
     private void removeChunksOutsideRenderDistance() {
         double renderDistanceBlocks = renderDistance.get() * 16;
-        BlockPos playerPos = mc.player.getBlockPos();
 
-        removeDistantChunks(playerPos, renderDistanceBlocks);
-        removeDistantPortals(renderDistanceBlocks);
+        removechunksOutsideRenderDistance(scannedChunks, mc.player.getBlockPos(), renderDistanceBlocks);
+        removeChunksOutsideRenderDistance(possiblePortalLocations, renderDistanceBlocks);
     }
-
-    private void removeDistantChunks(BlockPos playerPos, double renderDistanceBlocks) {
-        scannedChunks.removeIf(chunkPos ->
-                !playerPos.isWithinDistance(
-                        new BlockPos(chunkPos.getCenterX(), mc.player.getBlockY(), chunkPos.getCenterZ()),
-                        renderDistanceBlocks
-                )
-        );
-    }
-
-    private void removeDistantPortals(double renderDistanceBlocks) {
-        possiblePortalLocations.removeIf(box -> {
-            BlockPos playerPos = new BlockPos(
-                    mc.player.getBlockX(),
-                    Math.round((float) box.getCenter().getY()),
-                    mc.player.getBlockZ()
-            );
+    private void removeChunksOutsideRenderDistance(Set<Box> boxSet, double renderDistanceBlocks) {
+        boxSet.removeIf(box -> {
+            BlockPos playerPos = new BlockPos(mc.player.getBlockX(), Math.round((float)box.getCenter().getY()), mc.player.getBlockZ());
             return !playerPos.isWithinDistance(box.getCenter(), renderDistanceBlocks);
         });
+    }
+    private void removechunksOutsideRenderDistance(Set<ChunkPos> chunkSet, BlockPos playerPos, double renderDistanceBlocks) {
+        chunkSet.removeIf(c -> !playerPos.isWithinDistance(new BlockPos(c.getCenterX(), mc.player.getBlockY(), c.getCenterZ()), renderDistanceBlocks));
     }
 }
